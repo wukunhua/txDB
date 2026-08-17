@@ -37,19 +37,36 @@ MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 # 显式设为空字符串则 Panel 前端回落到 gateway_endpoint（老行为）。
 # Panel 后端 → Kernel 的转发地址始终走 REMOTE_INSTANCE_URL，不受此变量影响。
 detect_host_ip() {
-  local ip=""
-  # Linux
-  if command -v hostname >/dev/null 2>&1; then
-    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
-  fi
-  # macOS
-  if command -v ipconfig >/dev/null 2>&1; then
-    for iface in en0 en1 en2; do
-      ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+  local os ip=""
+  os=$(uname -s 2>/dev/null || echo unknown)
+
+  case "$os" in
+    MINGW*|MSYS*|CYGWIN*)
+      # Windows（Git Bash / MSYS / Cygwin）：用 PowerShell 取默认路由网卡的 IPv4，
+      # 避免拿到 Docker / WSL 虚拟网卡的 172.x 地址。
+      if command -v powershell.exe >/dev/null 2>&1; then
+        ip=$(powershell.exe -NoProfile -Command '(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceIndex -eq (Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex } | Select-Object -First 1).IPAddress' 2>/dev/null | tr -d '\r')
+      fi
       [[ -n "$ip" ]] && { echo "$ip"; return; }
-    done
-  fi
+      ;;
+    Darwin)
+      # macOS：常见网卡 IPv4
+      if command -v ipconfig >/dev/null 2>&1; then
+        for iface in en0 en1 en2; do
+          ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+          [[ -n "$ip" ]] && { echo "$ip"; return; }
+        done
+      fi
+      ;;
+    *)
+      # Linux：hostname -I
+      if command -v hostname >/dev/null 2>&1; then
+        ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
+        [[ -n "$ip" ]] && { echo "$ip"; return; }
+      fi
+      ;;
+  esac
+
   # 兜底：ip route（Linux 无 hostname -I 时）
   if command -v ip >/dev/null 2>&1; then
     ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
